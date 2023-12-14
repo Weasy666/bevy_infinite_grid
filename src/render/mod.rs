@@ -277,6 +277,7 @@ fn extract_infinite_grids(
     let extracted: Vec<_> = grids
         .iter()
         .map(|(entity, grid, transform, visible_entities)| {
+            debug!("Extracted: {:?}", entity);
             (
                 entity,
                 (
@@ -385,11 +386,16 @@ fn prepare_infinite_grids(
 
 fn prepare_grid_shadows(
     mut commands: Commands,
-    grids: Query<(Entity, &ExtractedInfiniteGrid, &GridFrustumIntersect)>,
+    grids: Query<(
+        Entity,
+        &ExtractedInfiniteGrid,
+        Option<&GridFrustumIntersect>,
+    )>,
     mut uniforms: ResMut<GridShadowUniforms>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
 ) {
+    debug!("Running prepare_grid_shadows");
     let grids_iter = grids.iter();
     let Some(mut uniform_writer) =
         uniforms
@@ -398,6 +404,10 @@ fn prepare_grid_shadows(
     else {
         return;
     };
+
+    if grids.is_empty() {
+        panic!("grids should not be empty!")
+    }
 
     for (entity, extracted, intersect) in grids.iter() {
         let transform = extracted.transform;
@@ -409,18 +419,20 @@ fn prepare_grid_shadows(
         // that was here before will crash the program with a panic! that
         // makes shadow_color: None unusable.
         if let Some(grid_shadow_color) = extracted.grid.shadow_color {
+            debug!("Inserting GridShadowUniform on {:?}", entity);
+
             commands.entity(entity).insert(GridShadowUniformOffset {
                 offset: uniform_writer.write(&GridShadowUniform {
                     shadow_color: Vec4::from_slice(&grid_shadow_color.as_rgba_f32()),
                     shadow_collapse_matrix: Mat3::from_cols(
-                        normal.cross(-intersect.up_dir),
+                        normal.cross(-intersect.unwrap().up_dir),
                         normal,
-                        -intersect.up_dir,
+                        -intersect.unwrap().up_dir,
                     )
                     .inverse(),
-                    shadow_center_pos: intersect.center,
-                    shadow_texture_height: intersect.height,
-                    shadow_texture_width: intersect.width,
+                    shadow_center_pos: intersect.unwrap().center,
+                    shadow_texture_height: intersect.unwrap().height,
+                    shadow_texture_width: intersect.unwrap().width,
                 }),
             });
         }
@@ -721,10 +733,10 @@ pub fn render_app_builder(app: &mut App) {
             Render,
             (
                 prepare_infinite_grids,
-                prepare_grid_shadows,
+                prepare_grid_shadows.after(prepare_infinite_grids),
                 prepare_grid_view_bind_groups,
             )
-                .in_set(RenderSet::Prepare),
+                .in_set(RenderSet::PrepareAssets),
         )
         .add_systems(
             Render,

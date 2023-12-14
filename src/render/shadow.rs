@@ -46,7 +46,8 @@ use std::ops::Range;
 use crate::{GlobalInfiniteGridSettings, GridFrustumIntersect};
 
 use super::{
-    ExtractedInfiniteGrid, GridShadowUniformOffset, GridShadowUniforms, InfiniteGridPipeline,
+    prepare_grid_shadows, ExtractedInfiniteGrid, GridShadowUniformOffset, GridShadowUniforms,
+    InfiniteGridPipeline,
 };
 
 static SHADOW_RENDER: &str = include_str!("shadow_render.wgsl");
@@ -142,6 +143,7 @@ impl FromWorld for GridShadowPipeline {
             view_layout,
             mesh_layouts: mesh_pipeline.mesh_layouts.clone(),
             sampler: render_device.create_sampler(&SamplerDescriptor {
+                label: Some("grid-shadow-sampler"),
                 address_mode_u: AddressMode::ClampToEdge,
                 address_mode_v: AddressMode::ClampToEdge,
                 address_mode_w: AddressMode::ClampToEdge,
@@ -369,6 +371,7 @@ fn queue_grid_shadow_bind_groups(
     render_device: Res<RenderDevice>,
 ) {
     if let Some(uniform_binding) = uniforms.uniforms.binding() {
+        debug!("trying queue_grid_shadow_bind_groups");
         for (entity, shadow_view) in grids.iter() {
             let bind_group = render_device.create_bind_group(
                 "grid-shadow-bind-group",
@@ -379,6 +382,7 @@ fn queue_grid_shadow_bind_groups(
                     BindingResource::Sampler(&grid_shadow_pipeline.sampler),
                 )),
             );
+            debug!("queue_grid_shadow_bind_groups on {:?}", entity);
             commands
                 .entity(entity)
                 .insert(GridShadowBindGroup { bind_group });
@@ -433,7 +437,10 @@ pub struct SetGridShadowBindGroup<const I: usize>;
 impl<const I: usize, P: PhaseItem> RenderCommand<P> for SetGridShadowBindGroup<I> {
     type Param = ();
     type ViewWorldQuery = ();
-    type ItemWorldQuery = Option<(Read<GridShadowBindGroup>, Read<GridShadowUniformOffset>)>;
+    type ItemWorldQuery = (
+        Option<Read<GridShadowBindGroup>>,
+        Read<GridShadowUniformOffset>,
+    );
 
     #[inline]
     fn render<'w>(
@@ -443,8 +450,11 @@ impl<const I: usize, P: PhaseItem> RenderCommand<P> for SetGridShadowBindGroup<I
         _query: SystemParamItem<'w, '_, Self::Param>,
         pass: &mut bevy::render::render_phase::TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
-        if let Some((bg, offset)) = bg_offset {
+        if let (Some(bg), offset) = bg_offset {
             pass.set_bind_group(I, &bg.bind_group, &[offset.offset]);
+        } else {
+            debug!("Unable to find binding: {:?}", _query);
+            return RenderCommandResult::Failure;
         }
         RenderCommandResult::Success
     }
@@ -548,13 +558,13 @@ pub fn register_shadow(app: &mut App) {
             (prepare_grid_shadow_views, apply_deferred)
                 .chain()
                 .before(prepare_view_uniforms)
-                .in_set(RenderSet::Prepare),
+                .in_set(RenderSet::PrepareAssets),
         )
         .add_systems(
             Render,
             (
                 queue_grid_shadows,
-                queue_grid_shadow_bind_groups,
+                queue_grid_shadow_bind_groups.after(prepare_grid_shadows),
                 queue_grid_shadow_view_bind_group,
             )
                 .in_set(RenderSet::Queue),
